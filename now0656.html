@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台中市仲介工會報到系統 - 雲端同步版</title>
+    <!-- React & Libraries -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js" type="module"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js" type="module"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js" type="module"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#f0f9ff', 100: '#e0f2fe', 500: '#0ea5e9', 700: '#0369a1', 900: '#0c4a6e' }
+                    },
+                    fontFamily: { sans: ['"Noto Sans TC"', 'sans-serif'] }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; overflow: hidden; }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .drag-item { cursor: grab; }
+        .dragging { opacity: 0.5; background: #fef2f2; }
+        @keyframes pulse-red { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+        .msg-pulse { animation: pulse-red 2s infinite; }
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .timeline-item::before {
+            content: ''; position: absolute; left: -21px; top: 10px; width: 12px; height: 12px;
+            border-radius: 50%; background: #e2e8f0; border: 2px solid #fff;
+        }
+        .timeline-item.active::before { background: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2); }
+        .timeline-item.done::before { background: #10b981; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 min-h-screen text-slate-800">
+    <div id="root"></div>
+
+    <script type="module" style="display:none">
+        // Firebase Setup & Global Exports for Babel
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'it-checkin-v25';
+
+        window.fb = { auth, db, appId, doc, setDoc, getDoc, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, signInAnonymously, signInWithCustomToken, onAuthStateChanged, writeBatch };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+        const { db, auth, appId, doc, setDoc, getDoc, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, signInAnonymously, signInWithCustomToken, onAuthStateChanged, writeBatch } = window.fb;
+
+        // --- 名單資料初始化預設值 ---
+        const delegateNames = ["陳正昌", "陳為人", "陳秀桃", "陳俊廷", "陳俊雄", "陳世欣", "陳建男", "陳思婷", "陳美玉", "陳淑芬", "陳廷亦", "陳楓卓", "王綉滿", "王國權", "江鳳嬌", "何榮松", "吳坤桐", "宋瑞堂", "吳俊諺", "林玉英", "林佳靜", "林忠勇", "林芷萱", "林信揚", "林宥葳", "林祐陞", "林惠鈴", "林葵蓉", "李佳華", "李美利", "李宜旻", "李崑裕", "李淑華", "李瑋皓", "巫柔填", "洪如茵", "洪沛清", "紀璟昌", "黃鴻鐘", "黃亭云", "黃奕智", "黃景文", "黃鈞涵", "張琬琳", "張瑋容", "梁承駿", "梁鴻憲", "游芬慧", "詹子緣", "楊振立", "楊念潔", "趙泰郎", "劉嘉琇", "劉志忠", "潘建祺", "蕭慶田", "羅兆吟", "賴佑建", "賴優慈", "戴立德", "鍾睿玲", "魏芊華", "嚴美惠"];
+        
+        const guestInitial = [
+            { type: '主管機關', name: '林淑媛', unit: '臺中市政府勞工局', title: '局長' },
+            { type: '主管機關', name: '廖繼誠', unit: '臺中市政府勞工局', title: '科長' },
+            { type: '主管機關', name: '何文章', unit: '勞工保險局台中辦事處', title: '主任' },
+            { type: '上級工會', name: '謝宗佑', unit: '台中市總工會', title: '理事長' },
+            { type: '顧問', name: '林亮宇', unit: '真亮法律事務所', title: '所長' },
+            { type: '友會', name: '黃文杰', unit: '台中市公有市場零售攤販職業工會', title: '理事長' },
+            { type: '友會', name: '陳敏志', unit: '台中市公寓大廈管理服務職業工會', title: '常務監事' }
+        ];
+
+        const agendaInitial = [
+            { num: '1', text: '大會開始' },
+            { num: '2', text: '主席致開會詞' },
+            { num: '3', text: '監事會召集人致詞' },
+            { num: '4', text: '主管機關代表暨上級工會代表致詞' },
+            { num: '5', text: '來賓致詞' },
+            { num: '6', text: '理事會工作報告' },
+            { num: '7', text: '監事會監察報告' },
+            { num: '8', text: '討論提案 (8-1~8-7)' },
+            { num: '9', text: '臨時動議' },
+            { num: '10', text: '閉會' }
+        ];
+
+        // --- 元件：時鐘 ---
+        const Clock = () => {
+            const [time, setTime] = useState(new Date());
+            useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
+            return (
+                <div className="text-center">
+                    <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{time.toLocaleDateString('zh-TW')}</div>
+                    <div className="text-2xl text-blue-600 font-black tracking-tighter">{time.toLocaleTimeString('zh-TW', { hour12: false })}</div>
+                </div>
+            );
+        };
+
+        // --- 元件：聊天盒 ---
+        const ChatBox = ({ messages, user }) => {
+            const [input, setInput] = useState('');
+            const scrollRef = useRef(null);
+            useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
+
+            const handleSend = async () => {
+                if (!input.trim()) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), {
+                    sender: user,
+                    text: input,
+                    time: new Date().toLocaleTimeString('zh-TW', {hour:'2-digit', minute:'2-digit'}),
+                    timestamp: Date.now()
+                });
+                setInput('');
+            };
+
+            return (
+                <div className="flex flex-col h-full bg-slate-900 rounded-2xl shadow-2xl border border-slate-700 overflow-hidden ring-4 ring-black/20">
+                    <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-3 text-sm font-black flex justify-between items-center">
+                        <div className="flex items-center gap-2"><span className="w-2 h-2 bg-red-500 rounded-full msg-pulse"></span>同步溝通頻道</div>
+                        <span className="bg-white/20 px-2 py-0.5 rounded text-[10px]">{user}</span>
+                    </div>
+                    <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-950/50">
+                        {messages.sort((a,b)=>a.timestamp-b.timestamp).map(m => (
+                            <div key={m.id} className={`flex flex-col ${m.sender === user ? 'items-end' : 'items-start'}`}>
+                                <span className="text-[10px] text-blue-400 font-bold mb-1 px-1">{m.sender}</span>
+                                <div className={`max-w-[85%] px-3 py-2 rounded-2xl text-sm ${m.sender === user ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-slate-200 rounded-tl-none'}`}>
+                                    {m.text}
+                                </div>
+                                <span className="text-[9px] text-slate-600 mt-1">{m.time}</span>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="p-3 bg-slate-900 border-t border-slate-700">
+                        <div className="flex gap-2 bg-slate-800 rounded-xl p-1">
+                            <input className="bg-transparent text-white text-sm px-3 py-2 flex-1 outline-none" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e=>e.key==='Enter'&&handleSend()} placeholder="輸入訊息..."/>
+                            <button onClick={handleSend} className="bg-blue-500 text-white w-10 h-10 rounded-lg hover:bg-blue-400 transition-colors flex items-center justify-center">
+                                <i className="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- 主程式 ---
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [tab, setTab] = useState('delegate');
+            const [delegates, setDelegates] = useState([]);
+            const [guests, setGuests] = useState([]);
+            const [agenda, setAgenda] = useState([]);
+            const [messages, setMessages] = useState([]);
+            const [loading, setLoading] = useState(true);
+
+            // 1. 初始化驗證
+            useEffect(() => {
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (err) { console.error("Auth error", err); }
+                };
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, (u) => { if(u) setUser(u); });
+                return () => unsubscribe();
+            }, []);
+
+            // 2. 資料即時監聽與初始化
+            useEffect(() => {
+                if (!user) return;
+
+                const unsubDelegates = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'delegates'), (snap) => {
+                    if (snap.empty) {
+                        // 首次初始化代表
+                        delegateNames.forEach((name, i) => {
+                            setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'delegates', `d${i+1}`), {
+                                id: String(i + 1).padStart(2, '0'),
+                                name,
+                                status: 'pending',
+                                time: null
+                            });
+                        });
+                    } else {
+                        setDelegates(snap.docs.map(d => ({ ...d.data(), fid: d.id })));
+                    }
+                }, (err) => console.error(err));
+
+                const unsubGuests = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'guests'), (snap) => {
+                    if (snap.empty) {
+                        guestInitial.forEach((g, i) => {
+                            setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guests', `g${i+1}`), {
+                                ...g, id: `g${i+1}`, status: 'pending', arrivalTime: null, introduced: false, note: '', rsvp: true, order: i
+                            });
+                        });
+                    } else {
+                        setGuests(snap.docs.map(d => ({ ...d.data(), fid: d.id })));
+                    }
+                });
+
+                const unsubAgenda = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'agenda'), (snap) => {
+                    if (snap.empty) {
+                        agendaInitial.forEach((a, i) => {
+                            setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'agenda', `a${i+1}`), {
+                                ...a, id: `a${i+1}`, status: i === 0 ? 'active' : 'pending', order: i
+                            });
+                        });
+                    } else {
+                        setAgenda(snap.docs.map(d => ({ ...d.data(), fid: d.id })));
+                    }
+                });
+
+                const unsubMsgs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), (snap) => {
+                    setMessages(snap.docs.map(d => ({ ...d.data(), id: d.id })));
+                    setLoading(false);
+                });
+
+                return () => { unsubDelegates(); unsubGuests(); unsubAgenda(); unsubMsgs(); };
+            }, [user]);
+
+            // --- 操作函式 ---
+            const updateDelegate = async (fid, status) => {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'delegates', fid), {
+                    status,
+                    time: status === 'pending' ? null : new Date().toLocaleTimeString()
+                });
+            };
+
+            const checkInGuest = async (fid) => {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guests', fid), {
+                    status: 'arrived',
+                    arrivalTime: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
+                });
+            };
+
+            const setAgendaStep = async (activeIdx) => {
+                const batch = writeBatch(db);
+                agenda.sort((a,b)=>a.order-b.order).forEach((a, i) => {
+                    const ref = doc(db, 'artifacts', appId, 'public', 'data', 'agenda', a.fid);
+                    const status = i < activeIdx ? 'done' : i === activeIdx ? 'active' : 'pending';
+                    batch.update(ref, { status });
+                });
+                await batch.commit();
+            };
+
+            if (loading) return <div className="h-screen flex items-center justify-center text-white font-black text-2xl animate-pulse">雲端資料同步中...</div>;
+
+            return (
+                <div className="p-4 max-w-[1600px] mx-auto flex flex-col h-screen">
+                    <header className="flex flex-col lg:flex-row justify-between items-center mb-6 gap-4">
+                        <div className="flex items-center gap-4 text-white">
+                            <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-blue-900 text-2xl shadow-xl"><i className="fas fa-cloud-arrow-up"></i></div>
+                            <div>
+                                <h1 className="text-2xl font-black leading-none">台中市仲介工會報到雲 <span className="text-[10px] bg-blue-500 text-white px-2 py-0.5 rounded ml-1">LIVE</span></h1>
+                                <p className="text-[10px] font-bold text-blue-300 tracking-[0.2em] mt-1 uppercase">Cloud Sync Conference System</p>
+                            </div>
+                        </div>
+                        <nav className="flex gap-1.5 bg-black/30 p-1.5 rounded-full backdrop-blur-xl border border-white/10 w-full lg:w-auto overflow-x-auto">
+                            {[
+                                {id:'delegate', icon:'fa-users-viewfinder', label:'代表報到'},
+                                {id:'guest', icon:'fa-address-card', label:'來賓中心'},
+                                {id:'committee', icon:'fa-scale-balanced', label:'大會組'},
+                                {id:'host', icon:'fa-microphone-lines', label:'主持人'}
+                            ].map(n => (
+                                <button key={n.id} onClick={()=>setTab(n.id)} className={`flex-1 lg:flex-none whitespace-nowrap px-6 py-2.5 rounded-full text-xs font-black transition-all ${tab===n.id ? 'bg-white text-blue-900 shadow-xl' : 'text-white/60 hover:bg-white/10'}`}>
+                                    <i className={`fas ${n.icon} mr-2`}></i>{n.label}
+                                </button>
+                            ))}
+                        </nav>
+                    </header>
+
+                    <main className="flex-1 min-h-0">
+                        {/* --- 1. 代表報到頁面 --- */}
+                        {tab === 'delegate' && (
+                            <div className="flex flex-col lg:flex-row gap-4 h-full">
+                                <div className="w-full lg:w-1/4 space-y-4 flex flex-col">
+                                    <div className="glass-panel p-5 rounded-3xl shadow-lg border-b-4 border-blue-500"><Clock /></div>
+                                    <div className="glass-panel p-5 rounded-3xl flex-1 border-l-8 border-cyan-500 shadow-lg space-y-6">
+                                        <h3 className="font-black text-slate-800 flex items-center gap-2"><i className="fas fa-chart-line text-cyan-600"></i> 代表統計</h3>
+                                        <div className="text-center bg-cyan-50 py-8 rounded-3xl border border-cyan-100">
+                                            <div className="text-xs font-bold text-slate-400 mb-1">出席總數</div>
+                                            <div className="text-6xl font-black text-cyan-600">{delegates.filter(d=>d.status!=='pending').length}</div>
+                                            <div className="text-[10px] text-slate-400 mt-2 font-bold uppercase tracking-widest">Target: {delegates.length}</div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div className="bg-white p-4 rounded-2xl border-2 border-blue-50 text-center">
+                                                <div className="text-[10px] font-bold text-blue-400">親自</div>
+                                                <div className="text-2xl font-black text-blue-600">{delegates.filter(d=>d.status==='personal').length}</div>
+                                            </div>
+                                            <div className="bg-white p-4 rounded-2xl border-2 border-amber-50 text-center">
+                                                <div className="text-[10px] font-bold text-amber-400">委託</div>
+                                                <div className="text-2xl font-black text-amber-600">{delegates.filter(d=>d.status==='proxy').length}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="w-full lg:w-2/4 glass-panel rounded-3xl border-t-8 border-blue-600 flex flex-col overflow-hidden shadow-2xl">
+                                    <div className="p-4 bg-white border-b flex justify-between items-center shrink-0">
+                                        <h2 className="text-xl font-black text-blue-900">代表報到名單</h2>
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Auto-Syncing...</span>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-4 bg-slate-50 grid grid-cols-1 md:grid-cols-2 gap-3 content-start">
+                                        {delegates.sort((a,b)=>a.id-b.id).filter(d=>d.status==='pending').map(d => (
+                                            <div key={d.fid} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex justify-between items-center hover:shadow-md transition-all">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-[10px] bg-slate-100 text-slate-400 p-1.5 rounded font-black">{d.id}</span>
+                                                    <span className="text-lg font-black text-slate-700">{d.name}</span>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button onClick={()=>updateDelegate(d.fid, 'personal')} className="bg-blue-600 text-white text-[10px] px-3 py-2 rounded-xl font-black shadow-lg shadow-blue-100 hover:scale-105 transition-transform">親自</button>
+                                                    <button onClick={()=>updateDelegate(d.fid, 'proxy')} className="bg-amber-500 text-white text-[10px] px-3 py-2 rounded-xl font-black shadow-lg shadow-amber-100 hover:scale-105 transition-transform">委託</button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="w-full lg:w-1/4 h-full flex flex-col"><ChatBox messages={messages} user="報到組"/></div>
+                            </div>
+                        )}
+
+                        {/* --- 2. 來賓中心頁面 --- */}
+                        {tab === 'guest' && (
+                            <div className="flex flex-col lg:flex-row gap-4 h-full">
+                                <div className="w-full lg:w-1/4 flex flex-col gap-4">
+                                    <div className="glass-panel p-5 rounded-3xl border-l-8 border-amber-500 flex-1 flex flex-col overflow-hidden shadow-lg">
+                                        <h3 className="font-black text-amber-800 mb-4 flex items-center justify-between">
+                                            <span><i className="fas fa-calendar-check mr-2"></i>預約貴賓</span>
+                                            <span className="text-xs bg-amber-100 px-2 py-0.5 rounded-full">{guests.filter(g=>g.status==='pending').length}</span>
+                                        </h3>
+                                        <div className="flex-1 overflow-y-auto space-y-2.5">
+                                            {guests.filter(g=>g.status==='pending').sort((a,b)=>a.order-b.order).map(g => (
+                                                <div key={g.fid} onClick={()=>checkInGuest(g.fid)} className="bg-white p-3 rounded-2xl border-2 border-transparent hover:border-amber-500 cursor-pointer shadow-sm transition-all group">
+                                                    <div className="flex justify-between items-start">
+                                                        <span className="font-black text-slate-700 group-hover:text-amber-600">{g.name}</span>
+                                                        <span className="text-[9px] bg-slate-100 px-1.5 py-0.5 rounded font-bold text-slate-400">{g.type}</span>
+                                                    </div>
+                                                    <div className="text-[10px] text-slate-400 font-bold truncate mt-1">{g.unit}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="w-full lg:w-2/4 glass-panel rounded-3xl border-t-8 border-amber-500 flex flex-col overflow-hidden shadow-2xl">
+                                    <div className="p-4 bg-white border-b flex justify-between items-center"><h2 className="text-xl font-black text-amber-900">貴賓報到清單</h2><Clock /></div>
+                                    <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50">
+                                        {guests.filter(g=>g.status!=='pending').sort((a,b)=>b.arrivalTime.localeCompare(a.arrivalTime)).map(g => (
+                                            <div key={g.fid} className="bg-white p-4 rounded-2xl shadow-sm flex items-center gap-4">
+                                                <div className="text-center bg-slate-50 p-2 rounded-xl min-w-[60px]">
+                                                    <div className="text-[8px] text-slate-400 font-bold">報到</div>
+                                                    <div className="text-xs font-black text-slate-600">{g.arrivalTime}</div>
+                                                </div>
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-black text-slate-800 text-lg">{g.name}</span>
+                                                        <span className="text-[9px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-black uppercase tracking-widest">{g.type}</span>
+                                                    </div>
+                                                    <div className="text-xs font-bold text-slate-400">{g.unit} · {g.title}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="w-full lg:w-1/4 h-full flex flex-col"><ChatBox messages={messages} user="來賓組"/></div>
+                            </div>
+                        )}
+
+                        {/* --- 3. 大會組頁面 --- */}
+                        {tab === 'committee' && (
+                            <div className="flex flex-col lg:flex-row gap-4 h-full">
+                                <div className="w-full lg:w-1/4 flex flex-col gap-4">
+                                    <div className="glass-panel p-5 rounded-3xl border-l-8 border-purple-500 shadow-lg">
+                                        <h3 className="font-black text-purple-900 mb-4 flex items-center gap-2"><i className="fas fa-check-double"></i> 出席門檻監控</h3>
+                                        <div className={`p-6 rounded-3xl border-2 transition-all ${delegates.filter(d=>d.status!=='pending').length >= 32 ? 'bg-emerald-50 border-emerald-500' : 'bg-rose-50 border-rose-500'}`}>
+                                            <div className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1">大會法定人數 (1/2)</div>
+                                            <div className="text-5xl font-black flex items-baseline gap-2">
+                                                <span className={delegates.filter(d=>d.status!=='pending').length >= 32 ? 'text-emerald-600' : 'text-rose-600'}>{delegates.filter(d=>d.status!=='pending').length}</span>
+                                                <span className="text-slate-300 text-xl">/ 32</span>
+                                            </div>
+                                            <div className={`text-[10px] mt-4 font-black ${delegates.filter(d=>d.status!=='pending').length >= 32 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                {delegates.filter(d=>d.status!=='pending').length >= 32 ? '✓ 已達法定人數，可開會' : '⚠ 目前人數不足，請聯繫代表'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="glass-panel p-5 rounded-3xl border-t-8 border-slate-800 flex-1 overflow-hidden flex flex-col shadow-lg">
+                                        <h3 className="font-black text-slate-800 mb-3 border-b pb-2 flex justify-between items-center">
+                                            <span>已報到來賓</span>
+                                            <span className="text-xs font-bold text-blue-500 bg-blue-50 px-2 py-0.5 rounded-full">{guests.filter(g=>g.status!=='pending').length}</span>
+                                        </h3>
+                                        <div className="flex-1 overflow-y-auto space-y-3">
+                                            {guests.filter(g=>g.status!=='pending').map(g => (
+                                                <div key={g.fid} className="bg-white p-2.5 rounded-xl border border-slate-100 text-slate-700 text-xs font-bold shadow-sm">{g.name} <span className="text-slate-300 ml-1">({g.type})</span></div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="w-full lg:w-2/4 glass-panel rounded-3xl border-t-8 border-purple-500 flex flex-col overflow-hidden shadow-2xl">
+                                    <div className="p-4 bg-white border-b flex justify-between items-center"><h2 className="text-xl font-black text-purple-900">大會議程進度同步</h2><Clock /></div>
+                                    <div className="flex-1 overflow-y-auto p-10 relative">
+                                        <div className="absolute left-12 top-0 bottom-0 w-1 bg-slate-100 rounded-full"></div>
+                                        <div className="space-y-5 relative">
+                                            {agenda.sort((a,b)=>a.order-b.order).map((a, idx) => (
+                                                <div key={a.fid} className={`timeline-item pl-14 cursor-pointer group ${a.status}`} onClick={()=>setAgendaStep(idx)}>
+                                                    <div className={`p-4 rounded-2xl border-2 transition-all ${a.status === 'active' ? 'bg-white border-blue-500 shadow-xl scale-105' : a.status === 'done' ? 'bg-slate-50 border-slate-100 opacity-50' : 'bg-white border-slate-50 group-hover:border-slate-200'}`}>
+                                                        <div className="flex items-center gap-4">
+                                                            <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs ${a.status === 'active' ? 'bg-blue-600 text-white animate-pulse' : 'bg-slate-200 text-slate-500'}`}>{a.num}</span>
+                                                            <span className={`font-black ${a.status === 'active' ? 'text-blue-900' : 'text-slate-600'}`}>{a.text}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="w-full lg:w-1/4 h-full flex flex-col"><ChatBox messages={messages} user="大會組"/></div>
+                            </div>
+                        )}
+
+                        {/* --- 4. 主持人頁面 --- */}
+                        {tab === 'host' && (
+                            <div className="flex flex-col lg:flex-row gap-4 h-full">
+                                <div className="w-full lg:w-3/4 glass-panel rounded-3xl border-t-8 border-rose-500 flex flex-col overflow-hidden shadow-2xl">
+                                    <div className="p-4 bg-white border-b flex justify-between items-center"><h2 className="text-xl font-black text-rose-900">主持人貴賓介紹提詞</h2><Clock /></div>
+                                    <div className="flex-1 overflow-y-auto p-6 bg-slate-50 space-y-8">
+                                        <h3 className="text-[10px] font-black text-rose-500 tracking-[0.3em] flex items-center gap-2"><span className="w-2 h-2 bg-rose-500 rounded-full animate-ping"></span> 待介紹貴賓名單</h3>
+                                        <div className="space-y-4">
+                                            {guests.filter(g=>g.status==='arrived' && !g.introduced).sort((a,b)=>a.order-b.order).map(g => (
+                                                <div key={g.fid} className="bg-white p-5 rounded-3xl border-2 border-transparent shadow-sm flex items-center justify-between hover:border-rose-300 transition-all">
+                                                    <div className="flex items-center gap-6">
+                                                        <button onClick={()=>updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guests', g.fid), {introduced: true})} className="w-12 h-12 rounded-full border-2 border-slate-100 text-slate-200 hover:border-rose-500 hover:text-rose-500 transition-all flex items-center justify-center"><i className="fas fa-check text-xl"></i></button>
+                                                        <div>
+                                                            <div className="flex items-center gap-3">
+                                                                <span className="font-black text-3xl text-slate-800">{g.name}</span>
+                                                                <span className="text-[10px] bg-slate-900 text-white px-2 py-0.5 rounded-full font-black">{g.type}</span>
+                                                            </div>
+                                                            <div className="text-sm font-bold text-slate-500 mt-1">{g.unit} · {g.title}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-slate-200"><i className="fas fa-grip-vertical text-xl"></i></div>
+                                                </div>
+                                            ))}
+                                            {guests.filter(g=>g.status==='arrived' && !g.introduced).length === 0 && <div className="text-center py-20 text-slate-300 font-black text-xl border-4 border-dashed border-slate-100 rounded-[3rem]">目前無待介紹貴賓</div>}
+                                        </div>
+                                        <div className="border-t pt-8">
+                                            <h3 className="text-[10px] font-black text-slate-400 tracking-[0.3em] mb-4">已完成介紹</h3>
+                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                                {guests.filter(g=>g.introduced).map(g => (
+                                                    <div key={g.fid} className="bg-slate-100 p-3 rounded-2xl text-slate-400 flex items-center justify-between opacity-60">
+                                                        <span className="font-bold text-sm line-through">{g.name}</span>
+                                                        <button onClick={()=>updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'guests', g.fid), {introduced: false})}><i className="fas fa-undo text-[10px]"></i></button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="w-full lg:w-1/4 h-full flex flex-col"><ChatBox messages={messages} user="主持人"/></div>
+                            </div>
+                        )}
+                    </main>
+
+                    <footer className="mt-4 text-center text-[10px] text-white/20 tracking-[0.5em] font-black uppercase">
+                        Real-time Cloud Node: {appId} | TC Real Estate Agents Union
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
